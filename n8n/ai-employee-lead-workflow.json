@@ -1,0 +1,107 @@
+{
+  "name": "AI Employee - Real Estate Lead Qualifier",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-employee-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "n1-webhook",
+      "name": "Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "ai-employee-lead"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || $input.first().json;\nconst ranges = { '2': 48, '3': 75 };\nconst min = ranges[String(b.bhk)] || 48;\nconst budget = Number(b.budget_lakh || 0);\nconst months = Number(b.timeline_months ?? 99);\nconst finance = String(b.finance || '');\nconst visit = b.visit === true || String(b.visit).toLowerCase() === 'yes';\n\nlet pts = 0;\nconst why = [];\nif (budget >= min * 0.95) { pts += 30; why.push('budget fits'); }\nelse if (budget >= min * 0.8) { pts += 15; why.push('budget close'); }\nif (months <= 3) { pts += 30; why.push('buying within 3 months'); }\nelse if (months <= 6) { pts += 20; why.push('within 6 months'); }\nelse if (months <= 12) { pts += 10; why.push('within a year'); }\nif (finance === 'Loan pre-approved' || finance === 'Self-funded') { pts += 20; why.push('money ready'); }\nelse if (finance === 'Loan needed') { pts += 10; why.push('loan needed'); }\nif (visit) { pts += 20; why.push('agreed to site visit'); }\n\nconst cls = pts >= 70 ? 'HOT' : pts >= 40 ? 'WARM' : 'COLD';\nconst next = cls === 'HOT' ? 'Call within 15 min, confirm visit' : cls === 'WARM' ? 'WhatsApp follow-up in 24 h' : 'Add to monthly nurture list';\n\nreturn [{ json: {\n  Time: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),\n  Name: b.name || 'Unknown',\n  Phone: b.phone || '',\n  Need: (b.bhk || '?') + ' BHK',\n  Budget_Lakh: budget,\n  Timeline_Months: months,\n  Payment: finance,\n  Site_Visit: visit ? 'Yes' : 'No',\n  Score: pts,\n  Class: cls,\n  Reason: why.join(', '),\n  Next_Action: next\n} }];"
+      },
+      "id": "n2-score",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "PASTE_YOUR_GOOGLE_SHEET_ID", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Leads", "mode": "name" },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "n3-sheet",
+      "name": "Save to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('Score Lead').item.json.Class }}",
+              "rightValue": "HOT",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n4-if",
+      "name": "Is it HOT?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "PASTE_YOUR_TELEGRAM_CHAT_ID",
+        "text": "=HOT lead: {{ $('Score Lead').item.json.Name }}\nNeed: {{ $('Score Lead').item.json.Need }}\nBudget: {{ $('Score Lead').item.json.Budget_Lakh }} lakh\nPhone: {{ $('Score Lead').item.json.Phone }}\nScore: {{ $('Score Lead').item.json.Score }}/100\nAction: {{ $('Score Lead').item.json.Next_Action }}",
+        "additionalFields": {}
+      },
+      "id": "n5-alert",
+      "name": "Alert Salesperson (Telegram)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [960, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, class: $('Score Lead').item.json.Class, score: $('Score Lead').item.json.Score } }}",
+        "options": {}
+      },
+      "id": "n6-respond",
+      "name": "Reply to Chat",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1200, 300]
+    }
+  ],
+  "connections": {
+    "Lead Webhook": { "main": [[{ "node": "Score Lead", "type": "main", "index": 0 }]] },
+    "Score Lead": { "main": [[{ "node": "Save to Google Sheet", "type": "main", "index": 0 }]] },
+    "Save to Google Sheet": { "main": [[{ "node": "Is it HOT?", "type": "main", "index": 0 }]] },
+    "Is it HOT?": {
+      "main": [
+        [{ "node": "Alert Salesperson (Telegram)", "type": "main", "index": 0 }],
+        [{ "node": "Reply to Chat", "type": "main", "index": 0 }]
+      ]
+    },
+    "Alert Salesperson (Telegram)": { "main": [[{ "node": "Reply to Chat", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
